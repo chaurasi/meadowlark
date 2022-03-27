@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2021 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2022 Hewlett Packard Enterprise Development Company LP.
  *
  *  This software is available to you under a choice of one of two
  *  licenses. You may choose to be licensed under the terms of the
@@ -28,6 +28,8 @@
 #include <list>
 #include <string>
 #include <stack>
+#include <tuple>
+#include <queue>
 #include <utility> // pair
 #include <vector>
 #include <iostream>
@@ -75,6 +77,7 @@ RadixTree::RadixTree(Mmgr *Mmgr, Heap *Heap, RadixTreeMetrics *Metrics,
     : mmgr(Mmgr), heap(Heap), metrics(Metrics), root(Root) {
     assert(mmgr != NULL);
     assert(heap != NULL);
+    //std::cout << "RadixTree(): user passed Root: " << Root << " updated class member root: " << root << std::endl;
     if (root == 0) {
         root = heap->Alloc(sizeof(Node));
         if (!root.IsValid()) {
@@ -216,6 +219,196 @@ void RadixTree::recursive_structure(Gptr parent, int level,
 
     for (int i = 0; i < 256; i++)
         recursive_structure(n->child[i], level + 1, structure);
+}
+
+int RadixTree::printNodeInfo(Node *n,
+                void *vptr,
+                int level,
+                bool flag_rec,
+                char *ubuf,
+                size_t ubuf_size)
+{
+#define NODE_INFO_LEN 256
+    char delimiter[3] = {0}, node_info[NODE_INFO_LEN] = {0};
+    static int prev_level = -1;
+    uint64_t *vp = (uint64_t *)vptr;
+    int nbytes;
+    static int partial_info = 0;
+    if(!level) prev_level = -1;
+    if(prev_level == level){
+        strcpy(delimiter, "\t");
+    }else{
+        if(!flag_rec && (prev_level != -1)) {
+	    //std::cout << " Returning from printNodeInfo() prev_level: ";
+	    //std::cout << prev_level << " level: " << level << std::endl;
+            return 1;
+        }
+        strcpy(delimiter, "\n");
+        prev_level = level;
+    }
+
+    nbytes = snprintf(node_info, NODE_INFO_LEN, "%s%s-%ld", delimiter, n->key, *vp);
+    if(nbytes >= NODE_INFO_LEN){
+	// Internal buffer is not big enough to hold entire information
+	partial_info++;
+	nbytes = NODE_INFO_LEN - 1;
+    }
+    node_info[nbytes] = 0;
+
+    if((nbytes + strlen(ubuf)) > ubuf_size){
+        // user buffer cannot accomodate
+        // complete information, return.
+#if 0
+	printf("User buffer cannot accomodate complete information\n");
+	printf("At present %ld bytes: (%s), couldnt append %d bytes (%s)\n", 
+			strlen(ubuf), ubuf, nbytes, node_info);
+#endif
+        return 2;
+    }
+
+    if(partial_info == 1){
+	printf("WARNING! famls may not be reporting full key names \n");
+    }
+
+    strcat(ubuf, node_info);
+
+    return 0;
+}
+
+int RadixTree::visitNode(Node *n,
+                int level,
+                bool flag_rec,
+                char *ubuf,
+                size_t ubuf_size)
+{
+
+    n->key[n->prefix_size] = 0;
+
+    TagGptr *tp = &n->value;
+    TagGptr tq;
+
+    loadTagGptr(tp, tq);
+
+    if (tq.IsValid()) {
+
+        void *vptr = (void *)toLocal(tq.gptr());
+
+        return printNodeInfo(n, vptr, level,
+                    flag_rec, ubuf, ubuf_size);
+
+    }else{
+#if 0
+	char ni[NODE_INFO_LEN] = {0};
+	sprintf(ni, " _NV_%s", n->key);
+        strcat(ubuf, ni);
+#endif
+	// non recursive case - we shouldnt be here with higher levels 
+	// recursive case - return if level is zero
+	// i.e., if(!flag_rec) || (flag_rec && !level) 
+	if(!level) {
+	    return 1;
+	}
+    }
+
+    return 0;
+}
+
+int RadixTree::traverse(Gptr startRoot,
+                char *tkey,
+                bool flag_rec,
+                char *ubuf,
+                size_t ubuf_size)
+{
+    if(startRoot == 0){
+        return 0;
+    }
+
+    Gptr *p = NULL;
+    Gptr q = startRoot;
+
+    size_t tksize = strlen(tkey);
+    if(tksize > 0 && tksize <= MAX_KEY_LEN){
+
+        while (q != 0) {
+
+            Node *n = (Node *)toLocal(q);
+            assert(n);
+
+            int kdifferent = fam_memcmp(tkey, n->key,
+                        std::min(n->prefix_size, tksize));
+
+            if (kdifferent){
+                return 0;
+            }
+
+            if (n->prefix_size == tksize) {
+                break;
+            }
+
+            if (tksize < n->prefix_size) {
+                return 0;
+            } else {
+                p = &n->child[(unsigned char)tkey[n->prefix_size]];
+                q = fam_atomic_u64_read((uint64_t *)p);
+            }
+
+        }
+
+        if(q == 0) {
+            return 0;
+        }
+
+    }
+
+    int i, pushlevel = 0, poplevel, done;
+
+    memset(ubuf, 0, ubuf_size);
+
+    std::queue<std::tuple<Gptr, int>> nodesQ;
+
+    std::tuple<Gptr, int> node_level_tuple;
+    node_level_tuple = std::make_tuple(q, pushlevel);
+
+    nodesQ.push(node_level_tuple);
+
+    while(!nodesQ.empty()){
+
+        std::tuple<Gptr, int> current_node_level_tuple = nodesQ.front();
+        Gptr current = std::get<0>(current_node_level_tuple);
+        poplevel = std::get<1>(current_node_level_tuple);
+
+        Node *n = (Node *)toLocal(current);
+        assert(n);
+
+	//std::cout << "visitNode(n{" << n->key << "(";
+	//std::cout << n->prefix_size << ")}, poplevel: ";
+	//std::cout << poplevel << ", flag_rec: ";
+	//std::cout << flag_rec << ", ubuf, ubuf_size);" << std::endl;
+        done = visitNode(n, poplevel, flag_rec, ubuf, ubuf_size);
+        if(done) {
+            return done;
+        }
+
+        pushlevel = poplevel + 1;
+
+        for( i = 0 ; i < 256 ; i++ ){
+
+            p = &n->child[(unsigned char)i];
+            q = fam_atomic_u64_read((uint64_t *)p);
+
+            if(q == 0){
+                continue;
+            }else{
+                /* Found a node */
+                node_level_tuple = std::make_tuple(q, pushlevel);
+                nodesQ.push(node_level_tuple);
+            }
+        }
+
+        nodesQ.pop(); 
+    }
+
+    return 0;
 }
 
 TagGptr RadixTree::put(const char *key, const size_t key_size, Gptr value,
@@ -439,10 +632,12 @@ TagGptr RadixTree::get(const char *key, const size_t key_size) {
 
     int pointer_traversals = 0;
 
+    //std::cout << "GET start @ q: " << q << " key: |" << key << "|(" << key_size << ")" << std::endl;
     while (q != 0) {
         Node *n = (Node *)toLocal(q);
         assert(n);
 
+        //std::cout << "GET @ q: " << q << " n->key: |" << n->key << "|(" << n->prefix_size << ")" << std::endl;
         int result =
             fam_memcmp(key, n->key, std::min(n->prefix_size, key_size));
         if (result != 0)

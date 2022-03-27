@@ -6,6 +6,7 @@ function (add_radixtree_test file_name )
 endfunction()
 
 add_radixtree_test(test_radix_tree)
+add_radixtree_test(test_famls)
 add_radixtree_test(test_split_ordered)
 add_radixtree_test(test_kvs)
 add_radixtree_test(test_cluster)

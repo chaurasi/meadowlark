@@ -1,5 +1,5 @@
 /*
- *  (c) Copyright 2016-2021 Hewlett Packard Enterprise Development Company LP.
+ *  (c) Copyright 2016-2022 Hewlett Packard Enterprise Development Company LP.
  *
  *  This software is available to you under a choice of one of two
  *  licenses. You may choose to be licensed under the terms of the
@@ -51,7 +51,6 @@ typedef enum {
 
 }UpdateFlags;
 
-
 class RadixTree {
 
 public:
@@ -97,6 +96,12 @@ public:
 
     // returns the root ptr of the radix tree
     Gptr get_root();
+
+    int traverse(Gptr startRoot,
+		    char *key,
+		    bool flag_rec,
+		    char *cbuf,
+		    size_t cbufsize);
 
     // returns 0 if the key does not exist (insert)
     // returns old value if the key exists (update)
@@ -192,6 +197,17 @@ private:
     void recursive_structure(Gptr parent, int level, TreeStructure& structure);
     bool lower_bound(Iter &iter);
     bool next_value(Iter &iter);
+    int visitNode(Node *n,
+		    int level,
+		    bool flag_rec,
+		    char *ubuf,
+		    size_t ubuf_size);
+    int printNodeInfo(Node *n,
+		    void *vptr,
+		    int level,
+		    bool flag_rec,
+		    char *ubuf,
+		    size_t ubuf_size);
 };
 
 
